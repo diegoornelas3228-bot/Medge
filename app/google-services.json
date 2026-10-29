@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "579392564679",
+    "project_id": "medge-d9e64",
+    "storage_bucket": "medge-d9e64.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:579392564679:android:9b575ef6c6a3c72b713de2",
+        "android_client_info": {
+          "package_name": "com.example.medge"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCO0EDiVpfk52981S6121qJzJOFGR2d6q0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
