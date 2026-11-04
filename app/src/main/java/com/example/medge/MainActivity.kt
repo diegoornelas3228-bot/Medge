@@ -13,7 +13,6 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -25,15 +24,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import com.example.medge.ui.theme.MedgeTheme
-import com.google.firebase.firestore.ktx.firestore
-import com.google.firebase.ktx.Firebase
-import kotlinx.coroutines.launch
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.PropertyName
 
+// Modelo de datos mapeado para Firestore
 data class Wallpaper(
-    val title: String = "",
-    val imageUrl: String = "",
-    val tag: String = "",
-    val isAiGenerated: Boolean = false
+    @get:PropertyName("title") @set:PropertyName("title") var title: String = "",
+    @get:PropertyName("imageUrl") @set:PropertyName("imageUrl") var imageUrl: String = "",
+    @get:PropertyName("tag") @set:PropertyName("tag") var tag: String = "",
+    @get:PropertyName("isAiGenerated") @set:PropertyName("isAiGenerated") var isAiGenerated: Boolean = false
 )
 
 class MainActivity : ComponentActivity() {
@@ -55,50 +54,44 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WallpaperHomeScreen() {
-    val wallpaperList = remember { mutableStateListOf<Wallpaper>() }
-    var searchQuery by remember { mutableStateOf("") }
-    var selectedTag by remember { mutableStateOf("Todos") }
+    var wallpaperList by remember { mutableStateOf<List<Wallpaper>>(emptyList()) }
+    var selectedTag by remember { mutableStateOf<String?>(null) }
     var hideAiImages by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
 
-    // Estados para los Diálogos
+    // Control de diálogos
+    var selectedWallpaperForDetail by remember { mutableStateOf<Wallpaper?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
-    var selectedWallpaper by remember { mutableStateOf<Wallpaper?>(null) } // Guarda la imagen seleccionada para ver en grande
 
-    var isRefreshing by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
-    fun loadWallpapers() {
-        val db = Firebase.firestore
-        db.collection("wallpapers")
-            .get()
-            .addOnSuccessListener { snapshot ->
-                wallpaperList.clear()
-                for (doc in snapshot.documents) {
-                    val wallpaper = doc.toObject(Wallpaper::class.java)
-                    if (wallpaper != null && wallpaper.imageUrl.isNotBlank()) {
-                        wallpaperList.add(wallpaper)
-                    }
-                }
-                isRefreshing = false
-            }
-            .addOnFailureListener {
-                isRefreshing = false
-            }
-    }
-
+    // Cargar wallpapers desde Firestore en tiempo real
     LaunchedEffect(Unit) {
-        loadWallpapers()
+        FirebaseFirestore.getInstance().collection("wallpapers")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) return@addSnapshotListener
+                if (snapshot != null) {
+                    val list = snapshot.toObjects(Wallpaper::class.java)
+                    wallpaperList = list
+                }
+            }
     }
 
-    val availableTags = remember(wallpaperList.size) {
+    // Lista única de etiquetas para la barra horizontal
+    val availableTags = remember(wallpaperList) {
         val tags = wallpaperList.map { it.tag.trim() }.filter { it.isNotBlank() }.distinct().sorted()
         listOf("Todos") + tags
     }
 
+    // Lógica de filtrado combinado (Búsqueda + Etiqueta + IA)
     val filteredList = wallpaperList.filter { wallpaper ->
-        val matchesSearch = wallpaper.title.contains(searchQuery, ignoreCase = true) ||
+        val matchesSearch = searchQuery.isEmpty() ||
+                wallpaper.title.contains(searchQuery, ignoreCase = true) ||
                 wallpaper.tag.contains(searchQuery, ignoreCase = true)
-        val matchesTag = if (selectedTag == "Todos") true else wallpaper.tag.equals(selectedTag, ignoreCase = true)
+
+        val matchesTag = selectedTag == null || selectedTag == "Todos" ||
+                wallpaper.tag.trim().equals(selectedTag?.trim(), ignoreCase = true)
+
         val matchesAiFilter = if (hideAiImages) !wallpaper.isAiGenerated else true
 
         matchesSearch && matchesTag && matchesAiFilter
@@ -112,153 +105,124 @@ fun WallpaperHomeScreen() {
         },
         floatingActionButton = {
             FloatingActionButton(onClick = { showAddDialog = true }) {
-                Text("+", style = MaterialTheme.typography.headlineMedium)
+                Text("+", style = MaterialTheme.typography.titleLarge)
             }
         }
     ) { innerPadding ->
-        PullToRefreshBox(
-            isRefreshing = isRefreshing,
-            onRefresh = {
-                isRefreshing = true
-                scope.launch {
-                    loadWallpapers()
-                }
-            },
+        Column(
             modifier = Modifier
-                .padding(innerPadding)
                 .fillMaxSize()
+                .padding(innerPadding)
         ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-
-                // 1. Buscador
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    placeholder = { Text("Buscar por título o etiqueta...") },
-                    leadingIcon = { Text("🔍", modifier = Modifier.padding(start = 8.dp)) },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = "" }) {
-                                Text("✖", style = MaterialTheme.typography.bodyLarge)
-                            }
-                        }
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(24.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                )
-
-                // 2. Barra de Etiquetas
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    item {
-                        FilterChip(
-                            selected = hideAiImages,
-                            onClick = { hideAiImages = !hideAiImages },
-                            label = { Text(if (hideAiImages) "🚫 Sin IA" else "🤖 Mostrar IA") }
-                        )
-                    }
-
-                    items(availableTags) { tag ->
-                        FilterChip(
-                            selected = (tag == selectedTag),
-                            onClick = { selectedTag = tag },
-                            label = { Text(tag) }
-                        )
-                    }
+            // 1. Barra de Etiquetas y Filtro de IA
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                // Chip para alternar filtro de IA
+                item {
+                    FilterChip(
+                        selected = hideAiImages,
+                        onClick = { hideAiImages = !hideAiImages },
+                        label = { Text(if (hideAiImages) "🚫 Sin IA" else "🤖 Todas las imágenes") }
+                    )
                 }
 
-                // 3. Grid de Wallpapers
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    contentPadding = PaddingValues(8.dp),
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(filteredList) { wallpaper ->
-                        Card(
-                            shape = RoundedCornerShape(12.dp),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                            modifier = Modifier.clickable {
-                                selectedWallpaper = wallpaper // Al hacer clic se selecciona la imagen
-                            }
-                        ) {
-                            Box(modifier = Modifier.height(260.dp)) {
-                                AsyncImage(
-                                    model = wallpaper.imageUrl,
-                                    contentDescription = wallpaper.title,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
+                // Chips para las categorías/etiquetas
+                items(availableTags) { tag ->
+                    FilterChip(
+                        selected = (tag == selectedTag),
+                        onClick = { selectedTag = if (selectedTag == tag) null else tag },
+                        label = { Text(tag) }
+                    )
+                }
+            }
 
-                                if (wallpaper.tag.isNotBlank()) {
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
-                                        shape = RoundedCornerShape(bottomEnd = 8.dp),
-                                        modifier = Modifier.align(Alignment.TopStart)
-                                    ) {
-                                        Text(
-                                            text = wallpaper.tag,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                        )
-                                    }
-                                }
-
-                                if (wallpaper.isAiGenerated) {
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.9f),
-                                        shape = RoundedCornerShape(bottomStart = 8.dp),
-                                        modifier = Modifier.align(Alignment.TopEnd)
-                                    ) {
-                                        Text(
-                                            text = "IA",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onErrorContainer,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
+            // 2. Cuadrícula de Wallpapers (Grid de Imágenes)
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                contentPadding = PaddingValues(8.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(filteredList) { wallpaper ->
+                    WallpaperItem(
+                        wallpaper = wallpaper,
+                        onClick = { selectedWallpaperForDetail = wallpaper }
+                    )
                 }
             }
         }
+    }
 
-        // Diálogo para Subir Imagen
-        if (showAddDialog) {
-            AddWallpaperDialog(
-                onDismiss = { showAddDialog = false },
-                onAdd = { title, tag, url, isAi ->
-                    val db = Firebase.firestore
-                    val newWallpaper = hashMapOf(
-                        "title" to title.trim(),
-                        "tag" to tag.trim(),
-                        "imageUrl" to url.trim(),
-                        "isAiGenerated" to isAi
-                    )
-                    db.collection("wallpapers").add(newWallpaper).addOnSuccessListener {
-                        loadWallpapers()
+    // Diálogo de detalle al hacer clic en un wallpaper
+    selectedWallpaperForDetail?.let { wallpaper ->
+        WallpaperDetailDialog(
+            wallpaper = wallpaper,
+            onDismiss = { selectedWallpaperForDetail = null }
+        )
+    }
+
+    // Diálogo para subir un nuevo wallpaper
+    if (showAddDialog) {
+        AddWallpaperDialog(
+            onDismiss = { showAddDialog = false },
+            onAdd = { title, tag, url, isAi ->
+                val newWallpaper = hashMapOf(
+                    "title" to title,
+                    "tag" to tag,
+                    "imageUrl" to url,
+                    "isAiGenerated" to isAi
+                )
+                FirebaseFirestore.getInstance().collection("wallpapers")
+                    .add(newWallpaper)
+                    .addOnSuccessListener {
+                        Toast.makeText(context, "Wallpaper agregado", Toast.LENGTH_SHORT).show()
+                        showAddDialog = false
                     }
-                    showAddDialog = false
-                }
-            )
-        }
+                    .addOnFailureListener {
+                        Toast.makeText(context, "Error al guardar", Toast.LENGTH_SHORT).show()
+                    }
+            }
+        )
+    }
+}
 
-        // Diálogo de Pantalla Completa (Vista Previa al Hacer Clic)
-        selectedWallpaper?.let { wallpaper ->
-            WallpaperDetailDialog(
-                wallpaper = wallpaper,
-                onDismiss = { selectedWallpaper = null }
+// Componente para representar cada tarjeta de Wallpaper en la cuadrícula
+@Composable
+fun WallpaperItem(
+    wallpaper: Wallpaper,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .padding(4.dp)
+            .fillMaxWidth()
+            .height(220.dp)
+            .clickable { onClick() },
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            AsyncImage(
+                model = wallpaper.imageUrl,
+                contentDescription = wallpaper.title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
             )
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+            ) {
+                Text(
+                    text = wallpaper.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(8.dp)
+                )
+            }
         }
     }
 }
@@ -269,7 +233,6 @@ fun WallpaperDetailDialog(
     wallpaper: Wallpaper,
     onDismiss: () -> Unit
 ) {
-    // Estado para controlar cómo se escala la imagen
     var scaleMode by remember { mutableStateOf(ContentScale.Crop) }
 
     Dialog(onDismissRequest = onDismiss) {
@@ -283,7 +246,6 @@ fun WallpaperDetailDialog(
                 modifier = Modifier.padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Contenedor que simula la pantalla del teléfono
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -293,7 +255,7 @@ fun WallpaperDetailDialog(
                     AsyncImage(
                         model = wallpaper.imageUrl,
                         contentDescription = wallpaper.title,
-                        contentScale = scaleMode, // Escala dinámica elegida por el usuario
+                        contentScale = scaleMode,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -307,7 +269,6 @@ fun WallpaperDetailDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Selector de modo de proporción / ajuste
                 Text(
                     text = "Ajuste de pantalla:",
                     style = MaterialTheme.typography.labelMedium
@@ -347,6 +308,7 @@ fun WallpaperDetailDialog(
     }
 }
 
+// Ventana Emergente para Agregar Nuevo Wallpaper
 @Composable
 fun AddWallpaperDialog(
     onDismiss: () -> Unit,
