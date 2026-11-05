@@ -1,5 +1,8 @@
 package com.example.medge
 
+import android.app.WallpaperManager
+import android.graphics.Bitmap
+import android.graphics.drawable.BitmapDrawable
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -22,10 +25,17 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import coil.ImageLoader
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import coil.request.SuccessResult
+import coil.size.Precision
 import com.example.medge.ui.theme.MedgeTheme
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.PropertyName
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // Modelo de datos mapeado para Firestore
 data class Wallpaper(
@@ -140,7 +150,7 @@ fun WallpaperHomeScreen() {
                 }
             }
 
-            // 2. Cuadrícula de Wallpapers (Grid de Imágenes)
+            // 2. Cuadrícula de Wallpapers (Grid de Imágenes sin texto)
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
                 contentPadding = PaddingValues(8.dp),
@@ -211,29 +221,20 @@ fun WallpaperItem(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
             )
-            Surface(
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.BottomCenter)
-            ) {
-                Text(
-                    text = wallpaper.title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(8.dp)
-                )
-            }
         }
     }
 }
 
-// Ventana Emergente con Selector de Proporción / Ajuste de Pantalla
+// Ventana Emergente con Selector de Proporción y Opción HD
 @Composable
 fun WallpaperDetailDialog(
     wallpaper: Wallpaper,
     onDismiss: () -> Unit
 ) {
     var scaleMode by remember { mutableStateOf(ContentScale.Crop) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var isSettingWallpaper by remember { mutableStateOf(false) }
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -249,7 +250,7 @@ fun WallpaperDetailDialog(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(420.dp)
+                        .height(380.dp)
                         .clip(RoundedCornerShape(12.dp))
                 ) {
                     AsyncImage(
@@ -269,11 +270,7 @@ fun WallpaperDetailDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Text(
-                    text = "Ajuste de pantalla:",
-                    style = MaterialTheme.typography.labelMedium
-                )
-
+                // Selector de proporción
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.padding(vertical = 4.dp)
@@ -295,13 +292,67 @@ fun WallpaperDetailDialog(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
+                // Botón para aplicar como Fondo de Pantalla
                 Button(
+                    onClick = {
+                        isSettingWallpaper = true
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                val loader = ImageLoader(context)
+                                val request = ImageRequest.Builder(context)
+                                    .data(wallpaper.imageUrl)
+                                    .allowHardware(false)
+                                    .build()
+
+                                val result = (loader.execute(request) as? SuccessResult)?.drawable
+                                val bitmap = (result as? BitmapDrawable)?.bitmap
+
+                                if (bitmap != null) {
+                                    val wallpaperManager = WallpaperManager.getInstance(context)
+                                    wallpaperManager.setBitmap(bitmap)
+
+                                    withContext(Dispatchers.Main) {
+                                        Toast.makeText(context, "¡Fondo de pantalla aplicado!", Toast.LENGTH_SHORT).show()
+                                        isSettingWallpaper = false
+                                        onDismiss()
+                                    }
+                                } else {
+                                    withContext(Dispatchers.Main) {
+                                        Toast.makeText(context, "Error al procesar la imagen", Toast.LENGTH_SHORT).show()
+                                        isSettingWallpaper = false
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(context, "Error: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                    isSettingWallpaper = false
+                                }
+                            }
+                        }
+                    },
+                    enabled = !isSettingWallpaper,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (isSettingWallpaper) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("Establecer como Fondo")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                TextButton(
                     onClick = onDismiss,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Cerrar")
+                    Text("Cancelar")
                 }
             }
         }
